@@ -10,7 +10,9 @@
 #include "spmv_comm_mpil.hpp"
 #include "spmv_comm_mpil_pers.hpp"
 #include "allreduce_comm_mpil.hpp"
+#ifndef MPIL_OLD_API  // no MPIL_Allreduce_init in the old API
 #include "allreduce_comm_mpil_pers.hpp"
+#endif
 #endif
 
 #endif

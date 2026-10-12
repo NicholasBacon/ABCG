@@ -4,6 +4,7 @@
 int main(int argc, char* argv[])
 {
     MPI_Init(&argc, &argv);
+    mpil_init();
     int rank, num_procs;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &num_procs);
@@ -200,6 +201,7 @@ int main(int argc, char* argv[])
     delete spmv_comm;
     delete allreduce_comm;
 
+    mpil_finalize();
     MPI_Finalize();
 
     return 0;

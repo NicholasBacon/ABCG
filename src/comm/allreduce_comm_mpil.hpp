@@ -2,7 +2,7 @@
 #define ALLREDUCE_COMM_MPIL_HPP
 
 #include "allreduce_comm.hpp"
-#include "locality_aware.h"
+#include "mpil_compat.hpp"
 
 class AllreduceCommMPIL : public AllreduceComm
 {
@@ -23,8 +23,12 @@ class AllreduceCommMPIL : public AllreduceComm
 
         void start()
         {
-            MPIL_Allreduce(local_sum, global_sum, 1, MPI_DOUBLE, MPI_SUM, 
-                    MPIL_COMM_WORLD);        
+#ifdef MPIL_OLD_API
+            // No MPI Advance allreduce in the old API; ALLREDUCE_PMPI is PMPI_Allreduce.
+            MPI_Allreduce(local_sum, global_sum, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+#else
+            MPIL_Allreduce(local_sum, global_sum, 1, MPI_DOUBLE, MPI_SUM, mpil_world());
+#endif
         }
 
         void wait()

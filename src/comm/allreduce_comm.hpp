@@ -12,24 +12,25 @@ class AllreduceComm
             global_sum = NULL;
         }
 
-        ~AllreduceComm()
+        // virtual for the same reason as SpMVComm: callers hold AllreduceComm*.
+        virtual ~AllreduceComm()
         {
 
         }
         
-        void init(double* loc, double* glob)
+        virtual void init(double* loc, double* glob)
         {
             local_sum = loc;
             global_sum = glob;
         }
 
-        void start()
+        virtual void start()
         {
              MPI_Allreduce(local_sum, global_sum, 1, MPI_DOUBLE, MPI_SUM, 
                   MPI_COMM_WORLD);
         }
 
-        void wait()
+        virtual void wait()
         {
 
         }

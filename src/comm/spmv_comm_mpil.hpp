@@ -2,7 +2,7 @@
 #define SPMV_COMM_MPIL_HPP
 
 #include "spmv_comm.hpp"
-#include "locality_aware.h"
+#include "mpil_compat.hpp"
 
 class SpMVCommMPIL : public SpMVComm
 {
@@ -55,7 +55,7 @@ class SpMVCommMPIL : public SpMVComm
                                          A->recv_comm.ptr.data(),
                                          MPI_DOUBLE,
                                          mpil_topo,
-                                         MPIL_COMM_WORLD);
+                                         mpil_world());
 
         }
 

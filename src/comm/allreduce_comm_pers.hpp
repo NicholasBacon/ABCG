@@ -3,6 +3,13 @@
 
 #include "allreduce_comm.hpp"
 
+// MPI_Allreduce_init is MPI 4.0; Open MPI 4.x (MPI 3.1) offers the same call as
+// MPIX_Allreduce_init in its pcollreq extension.
+#if MPI_VERSION < 4 && defined(OPEN_MPI)
+#include <mpi-ext.h>
+#define MPI_Allreduce_init MPIX_Allreduce_init
+#endif
+
 class AllreduceCommPers : public AllreduceComm
 {
     public:

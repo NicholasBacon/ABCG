@@ -1,0 +1,246 @@
+#ifndef PILOT_COMMON_HPP
+#define PILOT_COMMON_HPP
+
+// Shared by benchmark_spmv and benchmark_cg_pilot: the command line, the choice of
+// SpMV communication and allreduce (the arm), and output in irregular-benchmarking's format, so
+// that benchmark's analysis scripts and pilot.sbatch's targets parsing read these
+// outputs unchanged.
+
+#include "cg.hpp"
+
+#include <cstdlib>
+#include <cstring>
+#include <string>
+
+struct PilotOptions
+{
+    std::string file;
+    std::string name;      // -P, or the matrix file name without directory or .pm
+    std::string arm = "MPI";
+    int k = 25;            // startup window: the first k iterations, totalled apart
+    long n = 100;          // timed iterations after the window
+    double calc_s = 0.0;   // > 0: print the n that makes the run take this many seconds
+    std::string warmup = "none";
+    bool persistent = true; // STANDARD/LOCALITY: persistent init/start/wait, or one call per exchange
+    std::string split;      // -s SOCKET|NUMA|NODE: MPIL_Set_split, old API only; empty leaves the default
+};
+
+inline PilotOptions parse_pilot_options(int argc, char* argv[], const char* usage)
+{
+    int rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    PilotOptions opt;
+    for (int i = 1; i < argc; i++)
+    {
+        std::string a = argv[i];
+        bool has_value = i + 1 < argc;
+        if (a == "-c" && has_value) opt.arm = argv[++i];
+        else if (a == "-k" && has_value) opt.k = atoi(argv[++i]);
+        else if (a == "-n" && has_value) opt.n = atol(argv[++i]);
+        else if (a == "--calc" && has_value) opt.calc_s = atof(argv[++i]);
+        else if (a == "-P" && has_value) opt.name = argv[++i];
+        else if (a == "-W" && has_value) opt.warmup = argv[++i];
+        else if (a == "-s" && has_value) opt.split = argv[++i];
+        else if (a == "--persistent" && has_value)
+        {
+            std::string v = argv[++i];
+            if (v != "on" && v != "off")
+            {
+                if (rank == 0) printf("--persistent takes on or off\n%s", usage);
+                MPI_Abort(MPI_COMM_WORLD, 1);
+            }
+            opt.persistent = v == "on";
+        }
+        else if (a[0] != '-' && opt.file.empty()) opt.file = a;
+        else
+        {
+            if (rank == 0) printf("unknown or incomplete argument %s\n%s", a.c_str(), usage);
+            MPI_Abort(MPI_COMM_WORLD, 1);
+        }
+    }
+    bool arm_ok = opt.arm == "MPI" || opt.arm == "STANDARD" || opt.arm == "LOCALITY";
+    bool warmup_ok = opt.warmup == "none" || opt.warmup == "nearest" || opt.warmup == "all";
+    if (opt.file.empty() || !arm_ok || !warmup_ok || opt.k < 0 || opt.n < 1)
+    {
+        if (rank == 0) printf("%s", usage);
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+#ifndef MPIL
+    if (opt.arm != "MPI")
+    {
+        if (rank == 0) printf("-c %s needs a build with -DUSE_LOCALITY=ON\n", opt.arm.c_str());
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+#endif
+    // -s only affects MPI Advance, so the MPI arm accepts and ignores it, and a campaign
+    // can pass the same flags to every arm.
+    if (!opt.split.empty() && opt.arm == "MPI")
+    {
+        opt.split.clear();
+    }
+    if (!opt.split.empty())
+    {
+        bool split_ok = opt.split == "SOCKET" || opt.split == "NUMA" || opt.split == "NODE";
+#if defined(MPIL) && defined(MPIL_OLD_API)
+        if (!split_ok)
+        {
+            if (rank == 0) printf("-s takes SOCKET, NUMA or NODE\n%s", usage);
+            MPI_Abort(MPI_COMM_WORLD, 1);
+        }
+        MPIL_Set_split(opt.split == "SOCKET" ? SOCKET : opt.split == "NUMA" ? NUMA : NODE);
+#else
+        if (rank == 0) printf("-s needs a build with -DUSE_LOCALITY=ON -DMPIL_OLD_API=ON%s\n",
+                              split_ok ? "" : " (and takes SOCKET, NUMA or NODE)");
+        MPI_Abort(MPI_COMM_WORLD, 1);
+#endif
+    }
+    if (opt.name.empty())
+    {
+        opt.name = opt.file.substr(opt.file.find_last_of('/') + 1);
+        if (opt.name.size() > 3 && opt.name.compare(opt.name.size() - 3, 3, ".pm") == 0)
+            opt.name.resize(opt.name.size() - 3);
+    }
+    return opt;
+}
+
+// irregular-benchmarking's -W: an untimed exchange of 64 B and 128 KiB messages with
+// rank +/- d (nearest: d = 1; all: every d), on a duplicate of MPI_COMM_WORLD that is
+// freed afterwards, so those connections are open before anything is measured.
+inline void run_warmup(const std::string& mode)
+{
+    int rank, num_procs;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &num_procs);
+    std::vector<int> distances;
+    if (mode == "nearest")
+    {
+        distances.push_back(1);
+        if (num_procs - 1 != 1) distances.push_back(num_procs - 1);
+    }
+    else if (mode == "all")
+    {
+        for (int d = 1; d < num_procs; d++) distances.push_back(d);
+    }
+    if (distances.empty()) return;
+
+    MPI_Comm comm;
+    MPI_Comm_dup(MPI_COMM_WORLD, &comm);
+    const int sizes[2] = {1 << 6, 1 << 17};
+    std::vector<char> send_buf(sizes[1], 1), recv_buf(sizes[1]);
+    for (int d : distances)
+    {
+        int to = (rank + d) % num_procs;
+        int from = (rank - d + num_procs) % num_procs;
+        for (int bytes : sizes)
+        {
+            MPI_Request requests[2];
+            MPI_Irecv(recv_buf.data(), bytes, MPI_BYTE, from, 0, comm, &requests[0]);
+            MPI_Isend(send_buf.data(), bytes, MPI_BYTE, to, 0, comm, &requests[1]);
+            MPI_Waitall(2, requests, MPI_STATUSES_IGNORE);
+        }
+    }
+    MPI_Comm_free(&comm);
+}
+
+// MPI: ABCG's Isend/Irecv halo exchange. STANDARD and LOCALITY: MPI Advance's neighbor
+// alltoallv, persistent (init once, then start/wait: the INIT methods
+// irregular-benchmarking's arms use) or, with --persistent off, one call per exchange.
+inline SpMVComm* make_spmv_comm(const PilotOptions& opt)
+{
+#ifdef MPIL
+    bool standard = opt.arm == "STANDARD";
+    if (opt.arm != "MPI" && opt.persistent)
+    {
+        mpil_set_neighbor_init(standard ? NEIGHBOR_ALLTOALLV_INIT_STANDARD
+                                        : NEIGHBOR_ALLTOALLV_INIT_LOCALITY);
+        return new SpMVCommMPILPers();
+    }
+    if (opt.arm != "MPI")
+    {
+        mpil_set_neighbor(standard ? NEIGHBOR_ALLTOALLV_STANDARD : NEIGHBOR_ALLTOALLV_LOCALITY);
+        return new SpMVCommMPIL();
+    }
+#endif
+    return new SpMVComm();
+}
+
+// MPI: MPI_Allreduce. STANDARD and LOCALITY: MPI Advance's allreduce with ALLREDUCE_PMPI,
+// which hands the call to the MPI library, so only the SpMV communication differs. The
+// old API has no MPI Advance allreduce, and AllreduceCommMPIL calls MPI_Allreduce there.
+inline AllreduceComm* make_allreduce_comm(const PilotOptions& opt)
+{
+#ifdef MPIL
+    if (opt.arm != "MPI")
+    {
+#ifndef MPIL_OLD_API
+        MPIL_Set_allreduce_algorithm(ALLREDUCE_PMPI);
+#endif
+        return new AllreduceCommMPIL();
+    }
+#endif
+    return new AllreduceComm();
+}
+
+// The run settings in irregular-benchmarking's -r format, as its parse_run() reads them.
+inline void print_settings(const PilotOptions& opt, long n)
+{
+    int rank, num_procs;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &num_procs);
+    if (rank != 0) return;
+    printf("------------------------------------------------------------\n");
+    printf("-MPI: %s\n", opt.arm == "MPI" ? "MPI" : "MPIADVANCE");
+    printf("-File: %s\n", opt.file.c_str());
+    printf("-patterns: %s\n", opt.name.c_str());
+    printf("-warmup: %s\n", opt.warmup.c_str());
+    printf("-window (k): %d\n", opt.k);
+    printf("-timed iterations (n): %ld\n", n);
+    if (opt.arm != "MPI")
+    {
+        printf("-alltoallv: NEIGHBOR_ALLTOALLV_%s%s\n", opt.persistent ? "INIT_" : "",
+               opt.arm.c_str());
+        printf("-persistent: %s\n", opt.persistent ? "true" : "false");
+    }
+    if (!opt.split.empty()) printf("-split: %s\n", opt.split.c_str());
+    printf("-ranks: %d\n", num_procs);
+    printf("------------------------------------------------------------\n");
+}
+
+// One "(name)  label  min  max  average" row per value, reduced over ranks.
+inline void print_rows(const std::string& name, int count, const char* labels[], double* local)
+{
+    int rank, num_procs;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &num_procs);
+    std::vector<double> mins(count), maxs(count), sums(count);
+    MPI_Reduce(local, mins.data(), count, MPI_DOUBLE, MPI_MIN, 0, MPI_COMM_WORLD);
+    MPI_Reduce(local, maxs.data(), count, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+    MPI_Reduce(local, sums.data(), count, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+    if (rank != 0) return;
+    printf("%-20s %-12s %-12s %-12s\n", "Metric", "Min", "Max", "Average");
+    for (int i = 0; i < count; i++)
+    {
+        printf("(%s)  %-20s %-.6f     %-.6f     %-.6f\n",
+               name.c_str(), labels[i], mins[i], maxs[i], sums[i] / num_procs);
+    }
+}
+
+// Solves window = startup + q*k and timed = q*n from the max-over-ranks totals (ms),
+// and prints the n for which startup + q*(k + n) fills the budget, in the line format
+// pilot.sbatch turns into targets.
+inline void print_calc(const PilotOptions& opt, double window_ms, double timed_ms, long n)
+{
+    double window_max, timed_max;
+    MPI_Reduce(&window_ms, &window_max, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&timed_ms, &timed_max, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+    int rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    if (rank != 0) return;
+    double q = timed_max / n;
+    double startup = window_max - opt.k * q;
+    double n_budget = std::floor((opt.calc_s * 1000.0 - startup) / q - opt.k);
+    printf("(%s)  calc: q %.6f ms  startup %.6f ms  n %.0f  (budget %g s, k %d)\n",
+           opt.name.c_str(), q, startup, n_budget, opt.calc_s, opt.k);
+}
+
+#endif

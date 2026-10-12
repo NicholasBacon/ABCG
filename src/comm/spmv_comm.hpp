@@ -15,7 +15,9 @@ class SpMVComm
             n = 0;
         }
 
-        ~SpMVComm()
+        // virtual: CG(), spmv() and the pilots hold SpMVComm*, so without it every call
+        // runs this class's Isend/Irecv exchange even for the MPI Advance subclasses.
+        virtual ~SpMVComm()
         {
             if (spmv_req)
             {
@@ -23,7 +25,7 @@ class SpMVComm
             }
         }
 
-        void init(ParMat& A_in, double* sbuf, double* rbuf)
+        virtual void init(ParMat& A_in, double* sbuf, double* rbuf)
         {
             A = &A_in;
             sendbuf = sbuf;
@@ -40,7 +42,7 @@ class SpMVComm
             }
         }
 
-        void start()
+        virtual void start()
         {
             int proc, start, end;
             int tag = 0;
@@ -75,7 +77,7 @@ class SpMVComm
 
         }
 
-        void wait()
+        virtual void wait()
         {
             if (n)
             {
