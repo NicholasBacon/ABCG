@@ -65,12 +65,13 @@ by rank, still say which matrix they hold. Only the MPI arm can be captured: Ver
 every MPI call in the process, so CMake refuses `ABCG_VERNIER` together with `USE_LOCALITY`.
 One exchange is a capture of the whole pattern:
 ```bash
-VERNIER_NO_REQUESTS=1 VERNIER_NO_HIERARCHICAL_HISTOGRAM_MANAGER=1 \
+VERNIER_NO_REQUESTS=1 \
     <mpi running command> ./benchmarks/benchmark_spmv MATRIX.pm -c MPI -k 0 -n 1 -W none
 ```
 Vernier writes into the working directory: `vernier-0-0.hist-aggregate.json` (all ranks
-aggregated, on rank 0), and per rank `vernier-<rank>-0.hist-combined.json` and the trace
-`vernier-<rank>-0.txt`. `VERNIER_NO_REQUESTS` is needed with Vernier 09d650b, whose
+aggregated, on rank 0), and per rank `vernier-<rank>-0.hist-hierarchical.json` (per call
+type and partner, the message sizes; what irregular-benchmarking's fine patterns replay),
+`vernier-<rank>-0.hist-combined.json`, and the trace `vernier-<rank>-0.txt`. `VERNIER_NO_REQUESTS` is needed with Vernier 09d650b, whose
 aggregate output otherwise aborts every rank but 0 in `MPI_Finalize`; it only drops request
 ids from the trace. irregular-benchmarking's `pilot.sbatch` runs this capture for each
 matrix when `VERNIER_SPMV` is set.
