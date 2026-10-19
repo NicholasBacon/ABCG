@@ -38,8 +38,8 @@ the output rows and `-W none|nearest|all` runs irregular-benchmarking's untimed 
 `-s SOCKET|NUMA|NODE` calls `MPIL_Set_split` for the STANDARD and LOCALITY arms (old-API builds
 only), like irregular-benchmarking's `-s`; the MPI arm ignores it.
 ```bash
-<mpi running command> ./benchmarks/benchmark_spmv MATRIX.pm [-c MPI|STANDARD|LOCALITY] [-k 25] [-n 100] [--calc 10] [--persistent on|off] [-P NAME] [-W nearest]
-<mpi running command> ./benchmarks/benchmark_cg_pilot MATRIX.pm [-c MPI|STANDARD|LOCALITY] [-k 25] [-n 100] [--calc 10] [--persistent on|off] [-P NAME] [-W nearest]
+<mpi running command> ./benchmarks/benchmark_spmv MATRIX.pm [-c MPI|STANDARD|LOCALITY] [-k 25] [-n 100] [--calc 10] [--persistent on|off] [-P NAME] [-W nearest] [--iter-prefix PREFIX [--iter-raw] [--iter-compress]]
+<mpi running command> ./benchmarks/benchmark_cg_pilot MATRIX.pm [-c MPI|STANDARD|LOCALITY] [-k 25] [-n 100] [--calc 10] [--persistent on|off] [-P NAME] [-W nearest] [--iter-prefix PREFIX [--iter-raw] [--iter-compress]]
 ```
 - `benchmark_spmv` runs only the SpMV halo exchange (pack, exchange, barrier), with no
   multiply, allreduce, or vector math, and checks that every received value is the entry
@@ -48,12 +48,58 @@ only), like irregular-benchmarking's `-s`; the MPI arm ignores it.
   products, and the vector updates), restarting from `x = 0` whenever a solve converges, and
   reports `cgItersPerSolve` beside `cgReferenceIters`, the count from `CG()` itself
   (`cgItersPerSolve` is 0 when no solve finished within `k + n` iterations).
-- Both checks fail the run: `benchmark_spmv` exits 1 when any received value is wrong, and
-  `benchmark_cg_pilot` exits 1 when a finished solve took a different number of iterations
-  than `CG()` (it prints "check skipped" when no solve finished within `k + n`).
+- Both programs' checks fail the run (exit 1, "check FAILED"). `benchmark_spmv` checks every
+  received value. `benchmark_cg_pilot` runs its first solve again after timing (untimed)
+  with ABCG's own Isend/Irecv exchange and `MPI_Allreduce`, and compares the residual after
+  every iteration (`residualMaxRelDiff`, `residualItersCompared`): it fails above 1e-8
+  relative or if the two solves differ in length. A wrong halo value moves the residuals at
+  order one within a few iterations; a correct one matched bitwise in local tests. It also
+  compares iterations per finished solve with `CG()`'s count, but only at the default
+  `--max-iter 500` with convergence on, since `CG()` caps every solve at 500 whatever its
+  `max_iters` argument (`src/cg.hpp`); otherwise, or when no solve finished within
+  `k + n`, it prints "count check skipped". None of the six campaign matrices converges
+  within 500 iterations at the default tolerance, so there only the residual check
+  applies.
+- `benchmark_cg_pilot --max-iter N` caps each solve at N iterations (default 500), and
+  `--ignore-convergence` runs every solve to the cap whatever its residual. A solve also
+  ends, and restarts from `x = 0`, when its squared residual is no longer above 1e-250
+  (zero, NaN, or near the denormals, whose slow arithmetic would show as a timing change);
+  `underflowRestarts` counts those. In local tests the residual stalled near rounding
+  level rather than falling that far, so the guard fired only when `b` was scaled to
+  1e-120.
 - `--calc SECONDS` (pilot mode) prints the `n` for which startup + q·(k + n) fills
   `SECONDS`, from the max-over-ranks totals, in the line format irregular-benchmarking's
   `pilot.sbatch` reads into `targets`.
+- `--iter-prefix PREFIX` keeps every iteration's time in memory and, after the run, writes
+  `PREFIX_NAME_s0.iter.npy`, one row per iteration (window first) reduced over ranks, in
+  irregular-benchmarking's format (its README, "Per-iteration times"): `start_s` (rank 0's
+  wall-clock start, seconds since the epoch), and for `benchmark_spmv` `apply_max_ms`,
+  `apply_min_ms`, `apply_mean_ms` (pack and exchange, stopped before the barrier),
+  `slowest_rank` (largest apply), `iter_max_ms`, `iter_min_ms` (through the barrier), and
+  `iter_min_rank` (smallest barrier-inclusive time: the rank the others waited for when it
+  was delayed outside the exchange). `benchmark_cg_pilot` has no barrier, and its only
+  synchronizations are CG's allreduces, so it writes `iter_max_ms`, `iter_min_ms`,
+  `iter_mean_ms`, `slowest_rank`, and `iter_min_rank` over whole iterations; a solve's
+  restart is charged to its first iteration, as in the totals. `--iter-raw` adds
+  `PREFIX_NAME_s0.raw.npy` with every rank's rows, shape (ranks, iterations);
+  `--iter-compress` gzips the files (`.npy.gz`). Read with `np.load(path)`, or
+  `np.load(gzip.open(path))` when compressed.
+  Each run prints `-iter write (s):`, the time rank 0 took to write these files after
+  timing.
+  `--iter-raw` also measures each rank's clock offset from rank 0 before and after the
+  loop and writes `PREFIX_NAME_s0.offsets.npy`, for irregular-benchmarking's
+  `scripts/barrier-skew.py` (barrier exit skew; for the CG program, the spread of
+  iteration starts after its allreduces).
+  Needs zlib.
+- Both programs print `-MPI_Wtick:` and `-CLOCK_MONOTONIC resolution (ns):` (the clock
+  `MPI_Wtime` reads in Open MPI 4.1 on Linux) with their settings.
+- Both programs print `-source commit:` and `-locality_aware commit:` with their settings,
+  and carry them as one `PROVENANCE: source=<..> locality_aware=<..>` string that
+  `strings` finds. CMake takes them from `-DSOURCE_COMMIT` and `-DLOCALITY_AWARE_COMMIT`;
+  without `-DSOURCE_COMMIT` it reads `git rev-parse HEAD` (`-dirty` with uncommitted
+  changes) at configure time when the source is the top of its own checkout, and records
+  `unknown (not a git checkout)` otherwise. `LOCALITY_AWARE_COMMIT` defaults to `none`
+  without `USE_LOCALITY` and `unknown` with it.
 
 ### Capturing the SpMV pattern with Vernier
 

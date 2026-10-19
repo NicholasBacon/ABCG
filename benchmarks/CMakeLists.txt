@@ -7,12 +7,14 @@ if (USE_LOCALITY AND NOT MPIL_OLD_API)
     target_link_libraries(benchmark_cg_mpil abcg)
 endif()
 
-# Halo exchange only, and CG iteration timing, both with a --calc pilot mode.
+# Halo exchange only, and CG iteration timing, both with a --calc pilot mode. zlib
+# compresses their per-iteration files (--iter-prefix).
+find_package(ZLIB REQUIRED)
 add_executable(benchmark_spmv benchmark_spmv.cpp)
-target_link_libraries(benchmark_spmv abcg)
+target_link_libraries(benchmark_spmv abcg ZLIB::ZLIB)
 if (ABCG_VERNIER)
     target_compile_definitions(benchmark_spmv PRIVATE ABCG_VERNIER)
     target_link_libraries(benchmark_spmv vernier::vernier)
 endif()
 add_executable(benchmark_cg_pilot benchmark_cg_pilot.cpp)
-target_link_libraries(benchmark_cg_pilot abcg)
+target_link_libraries(benchmark_cg_pilot abcg ZLIB::ZLIB)

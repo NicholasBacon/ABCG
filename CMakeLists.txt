@@ -61,5 +61,46 @@ if (USE_LOCALITY)
     target_link_libraries(abcg PUBLIC MPIAdvance::locality_aware)
 endif()
 
+# The commits the binaries are built from, compiled in as one string that strings(1)
+# finds (irregular-benchmarking's scripts/provenance.sh) and printed by the pilot
+# programs. irregular-benchmarking's scripts/dane/build_abcg_pilots.sh passes both.
+# Otherwise SOURCE_COMMIT is read from git, at configure time only, and only when the
+# source is the top of its own checkout: a git-archive export inside another repository
+# (a home directory that is a repo) must not report that repository's commit.
+set(SOURCE_COMMIT "" CACHE STRING "Commit this source is; empty: read from git at configure time")
+set(LOCALITY_AWARE_COMMIT "" CACHE STRING "locality_aware commit linked; empty: unknown, or none without USE_LOCALITY")
+set(resolved_commit "${SOURCE_COMMIT}")
+if (resolved_commit STREQUAL "")
+    set(resolved_commit "unknown (not a git checkout)")
+    find_package(Git QUIET)
+    if (GIT_FOUND)
+        execute_process(COMMAND ${GIT_EXECUTABLE} rev-parse --show-toplevel
+                WORKING_DIRECTORY ${PROJECT_SOURCE_DIR} RESULT_VARIABLE git_status
+                OUTPUT_VARIABLE git_top OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+        get_filename_component(git_top "${git_top}" REALPATH)
+        get_filename_component(source_dir "${PROJECT_SOURCE_DIR}" REALPATH)
+        if (git_status EQUAL 0 AND git_top STREQUAL source_dir)
+            execute_process(COMMAND ${GIT_EXECUTABLE} rev-parse HEAD
+                    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+                    OUTPUT_VARIABLE resolved_commit OUTPUT_STRIP_TRAILING_WHITESPACE)
+            execute_process(COMMAND ${GIT_EXECUTABLE} status --porcelain --untracked-files=no
+                    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR} OUTPUT_VARIABLE git_changes)
+            if (NOT git_changes STREQUAL "")
+                string(APPEND resolved_commit "-dirty")
+            endif()
+        endif()
+    endif()
+endif()
+set(resolved_la_commit "${LOCALITY_AWARE_COMMIT}")
+if (resolved_la_commit STREQUAL "" AND USE_LOCALITY)
+    set(resolved_la_commit "unknown")
+elseif (resolved_la_commit STREQUAL "")
+    set(resolved_la_commit "none")
+endif()
+message(STATUS "Provenance: source ${resolved_commit}, locality_aware ${resolved_la_commit}")
+target_compile_definitions(abcg PUBLIC
+        "ABCG_SOURCE_COMMIT=\"${resolved_commit}\""
+        "LOCALITY_AWARE_COMMIT=\"${resolved_la_commit}\"")
+
 add_subdirectory(benchmarks)
 

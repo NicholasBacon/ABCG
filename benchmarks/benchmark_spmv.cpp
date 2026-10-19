@@ -12,12 +12,15 @@
 static const char* usage =
     "usage: benchmark_spmv MATRIX.pm [-c MPI|STANDARD|LOCALITY] [-k K] [-n N] [--calc SECONDS]\n"
     "       [-P NAME] [-W none|nearest|all] [--persistent on|off]\n"
-    "       [-s SOCKET|NUMA|NODE]\n"
+    "       [-s SOCKET|NUMA|NODE] [--iter-prefix PREFIX [--iter-raw] [--iter-compress]]\n"
     "  --calc prints the n that makes startup + q*(k + n) take SECONDS (pilot mode)\n"
     "  -P names the output rows (default: the matrix file name); -W is irregular-benchmarking's\n"
     "  untimed warmup; --persistent (STANDARD/LOCALITY, default on) picks MPI Advance's\n"
     "  persistent neighbor alltoallv or one call per exchange; -s calls MPIL_Set_split (old\n"
-    "  locality_aware API builds only)\n";
+    "  locality_aware API builds only)\n"
+    "  --iter-prefix writes PREFIX_NAME_s0.iter.npy, one row per iteration reduced over\n"
+    "  ranks; --iter-raw adds PREFIX_NAME_s0.raw.npy with every rank's rows (and the clock\n"
+    "  offsets); --iter-compress gzips them (.npy.gz)\n";
 
 int main(int argc, char* argv[])
 {
@@ -28,6 +31,11 @@ int main(int argc, char* argv[])
     int rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     PilotOptions opt = parse_pilot_options(argc, argv, usage);
+    if (opt.cg_options)
+    {
+        if (rank == 0) printf("--max-iter and --ignore-convergence are benchmark_cg_pilot options\n%s", usage);
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
     run_warmup(opt.warmup);
 
     ParMat A;
@@ -48,9 +56,15 @@ int main(int argc, char* argv[])
     double setup_ms = (MPI_Wtime() - t) * 1000.0;
 
     double window_ms = 0.0, timed_ms = 0.0;
+    IterLog log;
+    log.on = !opt.iter_prefix.empty();
+    log.has_apply = true;
+    if (log.on) log.reserve(opt.k + opt.n);
+    if (log.on && opt.iter_raw) log.offsets_before = measure_clock_offsets();
     MPI_Barrier(MPI_COMM_WORLD);
     for (long i = 0; i < opt.k + opt.n; i++)
     {
+        double wall = log.on ? wall_seconds() : 0.0;
         t = MPI_Wtime();
         comm->pack(x);
 #ifdef ABCG_VERNIER
@@ -64,11 +78,14 @@ int main(int argc, char* argv[])
 #ifdef ABCG_VERNIER
         end_pattern();
 #endif
+        double apply_ms = log.on ? (MPI_Wtime() - t) * 1000.0 : 0.0;
         MPI_Barrier(MPI_COMM_WORLD);
         double elapsed = (MPI_Wtime() - t) * 1000.0;
         if (i < opt.k) window_ms += elapsed;
         else timed_ms += elapsed;
+        if (log.on) log.record(wall, apply_ms, elapsed);
     }
+    if (log.on && opt.iter_raw) log.offsets_after = measure_clock_offsets();
 
     double bad = 0;
     for (int j = 0; j < A.recv_comm.size_msgs; j++)
@@ -83,6 +100,14 @@ int main(int argc, char* argv[])
                       A.send_comm.size_msgs * (double)sizeof(double), bad};
     print_rows(opt.name, 6, labels, local);
     if (opt.calc_s > 0) print_calc(opt, window_ms, timed_ms, opt.n);
+    if (log.on)
+    {
+        // Rank 0 writes every file, so its elapsed time is the whole cost; printed so a run
+        // shows what recording costs between runs.
+        double write_start = MPI_Wtime();
+        write_iter_files(opt.iter_prefix, opt.name, 0, log, opt.iter_raw, opt.iter_compressed);
+        if (rank == 0) printf("-iter write (s): %.3f\n", MPI_Wtime() - write_start);
+    }
 
     // A wrong halo value fails the run, so a campaign's manifest records it as an error.
     double bad_total;
