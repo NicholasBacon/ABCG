@@ -10,6 +10,9 @@
 #define MPI_Allreduce_init MPIX_Allreduce_init
 #endif
 
+// MPICH 3-based MPIs (e.g. MVAPICH2 2.3) have neither, so the class is left out there;
+// benchmarks/CMakeLists.txt makes the same test to skip benchmark_cg_mpi, its only user.
+#if MPI_VERSION >= 4 || defined(OPEN_MPI)
 class AllreduceCommPers : public AllreduceComm
 {
     public:
@@ -46,6 +49,7 @@ class AllreduceCommPers : public AllreduceComm
     private:
         MPI_Request req;
 };
+#endif
 
 #endif
 

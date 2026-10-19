@@ -5,7 +5,9 @@ Currently offers two variants:
 1. Baseline MPI version
 2. MPI Advance version
 
-By default, the code will only build the MPI version. To enable the MPI Advance version, make sure that CMake can find your installation of MPI Advance and set the `USE_LOCALITY` flag. For an older locality_aware (e.g. 752a19b, whose API spells the neighbor setters `alogorithm` and has no `MPIL_COMM_WORLD` or MPI Advance allreduce) also set `-DMPIL_OLD_API=ON`; `benchmark_cg_mpil` is not built then, and the MPI Advance allreduce falls back to `MPI_Allreduce`, which is what `ALLREDUCE_PMPI` calls. Both modes are fairly simple CMake builds:
+By default, the code will only build the MPI version. To enable the MPI Advance version, make sure that CMake can find your installation of MPI Advance and set the `USE_LOCALITY` flag. For an older locality_aware (e.g. 752a19b, whose API spells the neighbor setters `alogorithm` and has no `MPIL_COMM_WORLD` or MPI Advance allreduce) also set `-DMPIL_OLD_API=ON`; `benchmark_cg_mpil` is not built then, and the MPI Advance allreduce falls back to `MPI_Allreduce`, which is what `ALLREDUCE_PMPI` calls. With an MPI that has no persistent allreduce (MPI 3.1 MPICH
+derivatives such as MVAPICH2 2.3; Open MPI 4.x provides `MPIX_Allreduce_init`),
+`benchmark_cg_mpi` is not built; the pilots below are unaffected. Both modes are fairly simple CMake builds:
 ```bash
 mkdir build && cd build
 # MPI Only build

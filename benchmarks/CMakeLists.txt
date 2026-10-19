@@ -1,5 +1,19 @@
-add_executable(benchmark_cg_mpi benchmark_cg_mpi.cpp)
-target_link_libraries(benchmark_cg_mpi abcg)
+# benchmark_cg_mpi uses AllreduceCommPers, which needs MPI_Allreduce_init (MPI 4, or Open
+# MPI's MPIX_Allreduce_init); MPICH 3-based MPIs such as MVAPICH2 2.3 have neither.
+# Same test as src/comm/allreduce_comm_pers.hpp.
+include(CheckCXXSourceCompiles)
+set(CMAKE_REQUIRED_INCLUDES ${MPI_CXX_INCLUDE_DIRS})
+check_cxx_source_compiles("
+#include <mpi.h>
+#if !(MPI_VERSION >= 4 || defined(OPEN_MPI))
+#error no MPI_Allreduce_init
+#endif
+int main() { return 0; }" ABCG_HAVE_ALLREDUCE_INIT)
+unset(CMAKE_REQUIRED_INCLUDES)
+if (ABCG_HAVE_ALLREDUCE_INIT)
+    add_executable(benchmark_cg_mpi benchmark_cg_mpi.cpp)
+    target_link_libraries(benchmark_cg_mpi abcg)
+endif()
 
 # benchmark_cg_mpil drives the new API's allreduce algorithms, which MPIL_OLD_API lacks.
 if (USE_LOCALITY AND NOT MPIL_OLD_API)
