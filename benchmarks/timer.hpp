@@ -4,14 +4,19 @@ double time_function(int iter,
         std::vector<double>& x, 
         std::vector<double>& b)
 {
+    // CG() overwrites x, so restore the starting guess before each solve (untimed);
+    // otherwise every solve after the first starts from the previous solution.
+    std::vector<double> x0 = x;
     MPI_Barrier(MPI_COMM_WORLD);
-    double t0, tfinal;
-    t0 = MPI_Wtime();
+    double t0, tfinal = 0;
     for (int i = 0; i < iter; i++)
     {
+        x = x0;
+        t0 = MPI_Wtime();
         CG<SComm, AComm>(A, x, b);
+        tfinal += MPI_Wtime() - t0;
     }
-    tfinal = (MPI_Wtime() - t0) / iter;
+    tfinal /= iter;
     MPI_Allreduce(&tfinal, &t0, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
     return t0;
 }

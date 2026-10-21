@@ -15,7 +15,7 @@ class SpMVCommPers : public SpMVComm
         {
             for (int i = 0; i < n; i++)
             {
-                MPI_Request_free(&(spmv_req[n]));
+                MPI_Request_free(&(spmv_req[i]));
             }
 
             if (spmv_req)
